@@ -2,10 +2,11 @@
 This Python code is a port of the GoldenCheetah SrmRideFile.cpp.
 https://github.com/GoldenCheetah/GoldenCheetah
 """
+import argparse
 import math
-from datetime import date, timedelta, datetime, time
+from datetime import date, timedelta, datetime, time, timezone
 from struct import unpack
-from typing import BinaryIO, Union
+from typing import BinaryIO, Union, Tuple
 
 
 class UnrecognizedFileType(Exception):
@@ -36,7 +37,7 @@ class Record:
     timestamp: datetime
     seconds: float
     cadence: int
-    heart_rate: int
+    heartrate: int
     km: float
     kph: float
     nm: float
@@ -51,7 +52,7 @@ class Record:
                  timestamp: datetime,
                  seconds: float,
                  cadence: int,
-                 heart_rate: int,
+                 heartrate: int,
                  km: float,
                  kph: float,
                  nm: float,
@@ -64,7 +65,7 @@ class Record:
         self.timestamp = timestamp
         self.seconds = seconds
         self.cadence = cadence
-        self.heart_rate = heart_rate
+        self.heartrate = heartrate
         self.km = km
         self.kph = kph
         self.nm = nm
@@ -79,12 +80,12 @@ class Record:
         return (f'<Record'
                 f' seconds={self.seconds:.2f},'
                 f' cadence={self.cadence},'
-                f' heart_rate={self.heart_rate},'
+                f' heartrate={self.heartrate},'
                 f' km={self.km:.1f},'
                 f' kph={self.kph:.2f},'
                 f' nm={self.nm:.2f},'
                 f' watts={self.watts},'
-                f' altitude={self.altitude},'
+                f' altitude={self.altitude:.1f},'
                 f' longitude={self.longitude},'
                 f' latitude={self.latitude},'
                 f' temperature={self.temperature},'
@@ -92,7 +93,7 @@ class Record:
                 f' timestamp={repr(self.timestamp)}>')
 
 
-class Parser:
+class Decoder:
     in_: BinaryIO
     notes: str
     recording_interval: float
@@ -100,7 +101,6 @@ class Parser:
     date: date
     athlete_name: str
     start_time: Union[datetime, None]
-    records: [Record]
     zero_offset: int
     slope: float
 
@@ -109,12 +109,8 @@ class Parser:
         self.wheel_circumference = 2093
         self.date = date(1880, 1, 1)
         self.start_time = None
-        self.records = []
         self.zero_offset = 500
         self.slope = 25.0
-
-    def open_file(self, path: str):
-        self.in_ = open(path, 'rb')
 
     def read_raw(self, size: int) -> bytes:
         return self.in_.read(size)
@@ -139,7 +135,9 @@ class Parser:
         result, *_ = unpack('<l', self.in_.read(4))
         return result
 
-    def parse(self):
+    def decode(self, in_: BinaryIO) -> Tuple[Record]:
+        self.in_ = in_
+
         magic = self.read_raw(4)
         if magic[:3] != b'SRM':
             raise UnrecognizedFileType('missing magic')
@@ -207,8 +205,7 @@ class Parser:
             else:
                 block_header.chunk_count = self.read_long()
             block_header.timestamp = datetime.combine(self.date, time())
-            block_header.timestamp += timedelta(
-                seconds=seconds_since_noon * 10)
+            block_header.timestamp += timedelta(seconds=seconds_since_noon/100)
             block_chunk_count += block_header.chunk_count
             block_headers.append(block_header)
 
@@ -227,7 +224,7 @@ class Parser:
             block_count = 0
             block_header = BlockHeader()
             block_header.chunk_count = chunk_count
-            block_header.timestamp = datetime.combine(self.date, time())
+            block_header.timestamp = datetime.combine(self.date, tine())
             block_headers.append(block_header)
         if chunk_count > block_chunk_count:
             block_chunk_count = chunk_count
@@ -241,20 +238,21 @@ class Parser:
         if marker_count > 0:
             marker_num = 1
 
+        records = []
         for i in range(0, block_chunk_count):
             if version < 7:
                 ps = self.read_raw(3)
-                cad = self.read_byte()
-                hr = self.read_byte()
+                cadence = self.read_byte()
+                heartrate = self.read_byte()
                 kph = (((ps[1] & 0xf0) << 3) | (ps[0] & 0x7f)) * 3.0 / 26.0
                 watts = (ps[1] & 0x0f) | (ps[2] << 0x4)
                 altitude = 0.0
                 temperature = None
-                latitude = longitude = None
+                latitude = longitude = 0
             else:
                 watts = self.read_short()
-                cad = self.read_byte()
-                hr = self.read_byte()
+                cadence = self.read_byte()
+                heartrate = self.read_byte()
 
                 kph_tmp = self.read_signed_long()
                 kph = 0
@@ -266,7 +264,7 @@ class Parser:
                     latitude = self.read_signed_long() * 180.0 / 0x7fffffff
                     longitude = self.read_signed_long() * 180.0 / 0x7fffffff
                 else:
-                    latitude = longitude = None
+                    latitude = longitude = 0
 
             if not self.start_time:
                 self.start_time = block_headers[block_num].timestamp
@@ -281,16 +279,14 @@ class Parser:
                 interval += 1
 
             km += round(recording_interval_mseconds * kph / 3600.0, 4)
-            if cad:
-                nm = round(watts / 2.0 / math.pi / cad * 60.0, 4)
+            if cadence:
+                nm = round(watts / 2.0 / math.pi / cadence * 60.0, 4)
             else:
                 nm = 0.0
-
-            timestamp = block_headers[block_num].timestamp\
-                + timedelta(seconds=secs)
+            timestamp = block_headers[block_num].timestamp + timedelta(seconds=secs)
             record = Record(seconds=secs,
-                            cadence=cad,
-                            heart_rate=hr,
+                            cadence=cadence,
+                            heartrate=heartrate,
                             km=km,
                             kph=kph,
                             nm=nm,
@@ -301,7 +297,7 @@ class Parser:
                             longitude=longitude,
                             timestamp=timestamp,
                             interval=interval)
-            self.records.append(record)
+            records.append(record)
 
             block_index += 1
             if (block_index == block_headers[block_num].chunk_count
@@ -320,4 +316,26 @@ class Parser:
                     secs += diff_secs
             else:
                 secs += self.recording_interval
+        return tuple(records)
 
+
+def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument("file", help="The .srm file you want to decode")
+    args = parser.parse_args()
+
+    with open(args.file, 'rb') as f:
+        decoder = Decoder()
+        records = decoder.decode(f)
+        print(('Time,Speed [km/h],Power [watt],Cadence,Heartrate,'
+               'Temperature [℃],Altitude [m],latitude,longitude'))
+        for record in records:
+            # CSV format by SRMX software
+            print((f'{record.timestamp.strftime("%F %H:%M:%S")},'
+                   f'{record.kph:.1f},{record.watts:.1f},{record.cadence:.1f},'
+                   f'{record.heartrate:.1f},{record.temperature:.1f},'
+                   f'{record.altitude:.1f},{record.latitude},{record.longitude}'))
+
+
+if __name__ == '__main__':
+    main()
