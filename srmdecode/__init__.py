@@ -1,6 +1,6 @@
 import argparse
 
-from srmdecode import Decoder
+from srmdecode.decoder import Decoder
 
 
 def main():
