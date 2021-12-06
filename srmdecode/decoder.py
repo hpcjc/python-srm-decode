@@ -157,7 +157,7 @@ class Decoder:
 
         _ = self.read_byte()  # skip comment length
         comment = self.read_raw(70)
-        self.notes = comment.decode('UTF-8')
+        self.notes = comment
 
         markers = []
         comment_length = 255
@@ -189,7 +189,7 @@ class Decoder:
             else:
                 marker.start = start
                 marker.end = end
-            marker.note = comment.decode('UTF-8')
+            marker.note = comment
             if len(markers) == 0:
                 self.athlete_name = marker.note
             markers.append(marker)
