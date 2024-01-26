@@ -233,12 +233,13 @@ class Decoder:
         marker_num = 0
         interval = 0
         km = 0.0
-        secs = 0.0
         if marker_count > 0:
             marker_num = 1
 
         records = []
         for i in range(0, block_chunk_count):
+            secs = 0.0
+
             if version < 7:
                 ps = self.read_raw(3)
                 cadence = self.read_byte()
