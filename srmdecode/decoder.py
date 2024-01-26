@@ -234,6 +234,7 @@ class Decoder:
         interval = 0
         km = 0.0
         secs = 0.0
+
         if marker_count > 0:
             marker_num = 1
 
@@ -301,7 +302,7 @@ class Decoder:
             block_index += 1
             if (block_index == block_headers[block_num].chunk_count
                     and block_num + 1 < block_count):
-                duration = recording_interval_mseconds\
+                duration = self.recording_interval\
                     * block_headers[block_num].chunk_count
                 end = block_headers[block_num].timestamp\
                     + timedelta(seconds=duration)
